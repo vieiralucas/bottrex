@@ -82,6 +82,26 @@ function placeStopLoss(market, balance, rate, target) {
   })
 }
 
+function getOrder(orderId) {
+  return new Promise((resolve, reject) => {
+    bittrex.sendCustomRequest(`https://bittrex.com/api/v1.1/account/getorder?uuid=${orderId}`, (err, data) => {
+        if (err) {
+          console.log('failed to get order', orderId)
+          reject(err)
+          return
+        }
+
+        if (!data.success) {
+          console.log('failed to get order', orderId, data.message)
+          reject(new Error(data.message))
+          return
+        }
+
+        resolve(data.result)
+    }, true)
+  })
+}
+
 function cancelOrder(orderId) {
   return new Promise((resolve, reject) => {
     bittrex.sendCustomRequest(
@@ -136,9 +156,26 @@ getBalance(currency)
         const buyPrice = data.result[0].Rate
         const rate = buyPrice - distance
 
+        if (buyPrice < target) {
+          getOrder(currentStopLoss.OrderId)
+            .then(order => {
+              if (order.Closed) {
+                console.log('stop loss filled')
+                process.exit(0)
+              }
+            })
+            .catch(() => {
+              console.log('failed to get order')
+            })
+            .then(() => {
+              running = false
+            })
+          return
+        }
+
         if (buyPrice > target) {
-          console.log('place stop loss at', buyPrice - distance)
           if (!currentStopLoss) {
+            console.log('place stop loss at', buyPrice - distance)
             placeStopLoss(market, balance, rate, rate)
               .then(stopLoss => {
                 currentStopLoss = stopLoss
