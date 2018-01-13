@@ -191,7 +191,7 @@ getBalance(currency)
             return
           }
 
-          if (currentStopLoss.Rate < rate) {
+          if (currentStopLoss && currentStopLoss.Rate < rate) {
             cancelOrder(currentStopLoss.OrderId)
               .then(() => placeStopLoss(market, balance, rate, rate))
               .then(stopLoss => {
