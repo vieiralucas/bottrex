@@ -156,7 +156,7 @@ getBalance(currency)
         const buyPrice = data.result[0].Rate
         const rate = buyPrice - distance
 
-        if (buyPrice < target) {
+        if (currentStopLoss && buyPrice < target) {
           getOrder(currentStopLoss.OrderId)
             .then(order => {
               if (order.Closed) {
