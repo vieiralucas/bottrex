@@ -1,6 +1,7 @@
 #! /usr/bin/env node
 
 const bittrex = require('node.bittrex.api')
+const R = require('ramda')
 
 const apikey = process.env.BITTREX_API_KEY
 const apisecret = process.env.BITTREX_API_SECRET
@@ -45,7 +46,8 @@ function getBalance(currency) {
         return
       }
 
-      resolve(data.result.Balance)
+      console.log(data.result)
+      resolve(data.result.Available)
     })
   })
 }
@@ -131,88 +133,76 @@ getBalance(currency)
     const market = `BTC-${currency.toUpperCase()}`
     let currentStopLoss
     let running = false
-    const interval = setInterval(() => {
-      if (running) {
-        console.log('already running')
+
+    bittrex.websockets.subscribe([market], (data, client) => {
+      if (data.M !== 'updateExchangeState') {
         return
       }
 
-      running = true
-      bittrex.getorderbook({ market, depth: 10, type: 'buy' }, (err, data) => {
-        if (err) {
-          console.log(`Failed to get orderbook for ${market}`)
-          console.log('Error:', err)
-          running = false
-          return
-        }
+      if (data.A[0].Fills.length <= 0) {
+        return
+      }
 
-        if (!data.success) {
-          console.log(`Success false to get orderbook for ${market}`)
-          console.log('Message: ', data.message)
-          running = false
-          return
-        }
+      console.log(`############## ${new Date().toISOString()} ##############`)
+      console.log(`Fills: ${data.A[0].Fills.length}`)
+      const lastFill = R.pipe(
+        R.filter(({Quantity}) => Quantity >= balance),
+        R.tap(fills => console.log(`Filtered ${data.A[0].Fills.length - fills.length} because of quantity`)),
+        R.sortBy(R.descend(R.prop('TimeStamp'))),
+        R.head
+      )(data.A[0].Fills)
 
-        const buyPrice = data.result[0].Rate
-        const rate = buyPrice - distance
+      if (!lastFill) {
+        return
+      }
+      
+      console.log(`Last Fill: type: ${lastFill.OrderType} rate: ${lastFill.Rate} quantity: ${lastFill.Quantity} timestamp: ${lastFill.TimeStamp}`)
+      
+      const currentPrice = lastFill.Rate
+      const rate = currentPrice - distance
+      if (currentStopLoss && currentPrice < target) {
+        getOrder(currentStopLoss.OrderId)
+          .then(order => {
+            if (order.Closed) {
+              console.log('stop loss filled')
+              process.exit(0)
+            }
+          })
+          .catch(() => {
+            console.log('failed to get order')
+          })
+        return
+      }
 
-        if (currentStopLoss && buyPrice < target) {
-          getOrder(currentStopLoss.OrderId)
-            .then(order => {
-              if (order.Closed) {
-                console.log('stop loss filled')
-                process.exit(0)
-              }
+      if (currentPrice > target) {
+        if (!currentStopLoss) {
+          console.log('place stop loss at', currentPrice - distance)
+          placeStopLoss(market, balance, rate, rate)
+            .then(stopLoss => {
+              currentStopLoss = stopLoss
+              console.log(currentStopLoss)
             })
-            .catch(() => {
-              console.log('failed to get order')
-            })
-            .then(() => {
-              running = false
+            .catch(err => {
+              console.log('couldnt place stop loss')
+              console.log(err)
             })
           return
         }
-
-        if (buyPrice > target) {
-          if (!currentStopLoss) {
-            console.log('place stop loss at', buyPrice - distance)
-            placeStopLoss(market, balance, rate, rate)
-              .then(stopLoss => {
-                currentStopLoss = stopLoss
-                console.log(currentStopLoss)
-              })
-              .catch(err => {
-                console.log('couldnt place stop loss')
-                console.log(err)
-              })
-              .then(() => {
-                running = false
-              })
-            return
-          }
-
-          if (currentStopLoss && currentStopLoss.Rate < rate) {
-            cancelOrder(currentStopLoss.OrderId)
-              .then(() => placeStopLoss(market, balance, rate, rate))
-              .then(stopLoss => {
-                currentStopLoss = stopLoss
-                console.log(currentStopLoss)
-              })
-              .catch(err => {
-                console.log('couldnt replace stop loss')
-                console.log(err)
-              })
-              .then(() => {
-                running = false
-              })
-            return
-          }
-
-          running = false
+        
+        if (currentStopLoss && currentStopLoss.Rate < rate) {
+          cancelOrder(currentStopLoss.OrderId)
+            .then(() => placeStopLoss(market, balance, rate, rate))
+            .then(stopLoss => {
+              currentStopLoss = stopLoss
+              console.log(currentStopLoss)
+            })
+            .catch(err => {
+              console.log('couldnt replace stop loss')
+              console.log(err)
+            })
           return
         }
-        running = false
-      })
-    }, 1000)
+      }
+    })
   })
   .catch(console.error)
